@@ -13,7 +13,7 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
     return gspread.authorize(creds)
 
-# --- 3. 데이터 로드 및 전처리 함수 ---
+# --- 3. 데이터 로드 함수 ---
 def load_data():
     client = get_gspread_client()
     sheet_id = "1718siWh7O-He8KQ3Ae2lHhpRsNaENzGFk0i2pu8398Q" 
@@ -21,6 +21,7 @@ def load_data():
     sheet = doc.worksheet("학생현황")
     all_values = sheet.get_all_values()
     
+    # 제목줄 찾기
     header_idx = 0
     for i, row in enumerate(all_values):
         if '학년' in row and '성명' in row:
@@ -30,6 +31,7 @@ def load_data():
     header = all_values[header_idx]
     data = all_values[header_idx + 1:]
     
+    # 중복 제목 방지
     seen = {}
     new_header = []
     for h in header:
@@ -42,7 +44,7 @@ def load_data():
             
     return pd.DataFrame(data, columns=new_header), doc
 
-# --- 4. 메인 화면 구성 ---
+# --- 4. 메인 화면 ---
 st.title("☀️ 실시간 지각 체크 시스템")
 
 try:
@@ -62,35 +64,36 @@ try:
     if class_df.empty:
         st.warning(f"{target_grade}학년 {target_room}반 데이터가 없습니다.")
     else:
+        # 학생 체크박스 리스트
         late_list = []
         for index, row in class_df.iterrows():
-            if st.checkbox(f"👤 {row['성명']}", key=index):
+            # 체크박스 상태는 버튼을 눌러도 유지됩니다.
+            if st.checkbox(f"👤 {row['성명']}", key=f"chk_{row['성명']}"):
                 late_list.append(row)
 
         st.divider()
 
-        # --- [수정된 버튼 로직] ---
+        # 보고 및 저장 버튼
         if st.button(f"🚀 {len(late_list)}명 지각 보고 및 저장", use_container_width=True):
             if not late_list:
                 st.info("선택된 학생이 없습니다.")
             else:
                 log_sheet = doc.worksheet("지각기록")
                 
-                # 1. 이미 기록된 데이터 가져오기 (중복 체크용)
+                # 1. 시트의 현재 기록을 다시 읽어옴 (최신 중복 체크용)
                 existing_logs = log_sheet.get_all_records()
                 existing_df = pd.DataFrame(existing_logs)
                 
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 now_full = datetime.now().strftime("%Y-%m-%d %H:%M")
                 
-                new_count = 0
-                already_count = 0
+                newly_added = []
+                already_in = []
                 
                 for s in late_list:
-                    # 중복 조건: 오늘 날짜에 해당 학생 이름이 이미 있는지 확인
                     is_duplicate = False
                     if not existing_df.empty:
-                        # '날짜' 컬럼에서 오늘 날짜를 포함하고, '성명'이 같은지 확인
+                        # 날짜가 오늘이고 성명이 같은지 확인
                         match = existing_df[
                             (existing_df['날짜'].str.contains(today_str)) & 
                             (existing_df['성명'] == s['성명'])
@@ -99,28 +102,22 @@ try:
                             is_duplicate = True
                     
                     if not is_duplicate:
-                        # 중복이 아닐 때만 기록
+                        # [핵심] 중복이 아닌 학생만 추가
                         log_sheet.append_row([now_full, s['학년'], s['반'], s['성명'], s.get('학부모폰', '')])
-                        new_count += 1
+                        newly_added.append(s['성명'])
                     else:
-                        already_count += 1
+                        already_in.append(s['성명'])
                 
-                # 결과 알림
-                if new_count > 0:
-                    st.toast(f"{new_count}명 신규 기록 완료!", icon="✅")
-                if already_count > 0:
-                    st.warning(f"{already_count}명은 이미 오늘 기록되었습니다.")
+                # 결과 보고 (사용자 피드백)
+                if newly_added:
+                    st.toast(f"{len(newly_added)}명 신규 기록 완료!", icon="✅")
+                    st.success(f"새로 기록된 학생: {', '.join(newly_added)}")
                 
-                if new_count > 0:
-                    st.success("구글 시트에 성공적으로 저장되었습니다.")
+                if already_in:
+                    st.info(f"이미 기록되어 제외된 학생: {', '.join(already_in)}")
                 
-                # 다운로드용 세션 저장
-                st.session_state['last_late'] = late_list
-
-        if 'last_late' in st.session_state:
-            late_df = pd.DataFrame(st.session_state['last_late'])
-            csv = late_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 하이에듀 업로드용 CSV 다운로드", data=csv, file_name=f"late_{datetime.now().strftime('%m%d')}.csv")
+                if not newly_added and already_in:
+                    st.warning("새로 추가된 인원이 없습니다. 모두 이미 기록된 학생들입니다.")
 
 except Exception as e:
     st.error(f"⚠️ 오류 발생: {e}")
