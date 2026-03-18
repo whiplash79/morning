@@ -1,71 +1,67 @@
 import streamlit as st
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- 1. 설정 및 데이터 로드 ---
-st.set_page_config(page_title="지각생 체크 시스템", layout="centered")
+# 1. 구글 시트 연결 설정
+def get_gspread_client():
+    scope = ["https://www.googleapis.com/auth/spreadsheets"]
+    # Secrets에 저장한 JSON 열쇠를 사용합니다.
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    return gspread.authorize(creds)
 
-# 실제 구현 시에는 google-sheets-reader를 사용하지만, 여기서는 예시 데이터를 사용합니다.
-# 유저님이 공유해주신 시트 데이터를 불러오는 로직이 들어갈 자리입니다.
-def load_student_data():
-    # 예시 데이터 (실제로는 구글 시트에서 fetch)
-    data = {
-        '학년': [3, 3, 3, 3],
-        '반': [1, 1, 2, 2],
-        '성명': ['김철수', '이영희', '박민수', '최지우'],
-        '학생폰': ['01011112222', '01022223333', '01033334444', '01044445555'],
-        '학부모폰': ['01099998888', '01077776666', '01055554444', '01033332222']
-    }
-    return pd.DataFrame(data)
+# 2. 데이터 불러오기 및 저장하기
+def load_data():
+    client = get_gspread_client()
+    # 선생님의 시트 ID (주소창의 d/ 뒤쪽 문자열)
+    sheet_id = "1718siWh7O-He8KQ3Ae2lHhpRsNaENzGFk0i2pu8398Q" 
+    doc = client.open_by_key(sheet_id)
+    
+    # '학생현황' 탭에서 명단 읽기
+    sheet = doc.worksheet("학생현황")
+    return pd.DataFrame(sheet.get_all_records()), doc
 
-df = load_student_data()
+st.title("☀️ 실시간 지각 체크")
 
-# --- 2. 파라미터를 이용한 반 자동 인식 ---
-# URL 예시: myapp.streamlit.app/?grade=3&room=1
-query_params = st.query_params
-target_grade = int(query_params.get("grade", 3)) # 기본값 3학년
-target_room = int(query_params.get("room", 1))   # 기본값 1반
+try:
+    df, doc = load_data()
+    
+    # 주소창에서 반 정보 읽기 (예: ?grade=3&room=1)
+    qp = st.query_params
+    target_grade = int(qp.get("grade", 3))
+    target_room = int(qp.get("room", 1))
 
-# --- 3. 교사용 체크 화면 ---
-st.title(f"☀️ {target_grade}학년 {target_room}반")
-st.subheader("오늘의 지각생을 체크해 주세요.")
-
-# 해당 반 학생만 필터링
-class_df = df[(df['학년'] == target_grade) & (df['반'] == target_room)]
-
-late_students = []
-for index, row in class_df.iterrows():
-    # 모바일에서 누르기 편하도록 큰 체크박스 제공
-    if st.checkbox(f"{row['성명']}", key=f"std_{index}"):
-        late_students.append(row)
-
-# --- 4. 데이터 제출 ---
-if st.button(f"🚀 {len(late_students)}명 지각 보고", use_container_width=True):
-    if not late_students:
-        st.success("오늘 우리 반은 지각생이 없습니다! 👍")
+    st.subheader(f"📍 {target_grade}학년 {target_room}반")
+    
+    # 해당 반 학생만 필터링
+    class_df = df[(df['학년'] == target_grade) & (df['반'] == target_room)]
+    
+    if class_df.empty:
+        st.warning("해당 반의 학생 데이터가 시트에 없습니다.")
     else:
-        # 여기에 구글 시트의 'Today_Late' 시트로 데이터를 전송하는 코드가 들어갑니다.
-        st.info(f"{[s['성명'] for s in late_students]} 학생이 기록되었습니다.")
-        st.success("중앙 관리자에게 전송 완료!")
+        # 체크박스 리스트 생성
+        late_list = []
+        for index, row in class_df.iterrows():
+            if st.checkbox(f"👤 {row['성명']}", key=index):
+                late_list.append(row)
 
-# --- 5. [관리자 전용] 하이에듀용 파일 생성 ---
-with st.sidebar:
-    st.header("Admin Menu")
-    if st.button("📥 하이에듀 업로드 파일 생성"):
-        # 오늘 기록된 데이터를 모아서 하이에듀 양식으로 변환
-        # 하이에듀는 보통 [수신번호, 메시지내용] 형태의 CSV를 요구합니다.
-        export_data = []
-        for s in late_students:
-            msg = f"[지각안내] {s['성명']} 학생이 아직 미등교입니다."
-            export_data.append({"수신번호": s['학생폰'], "메시지": msg})
-            export_data.append({"수신번호": s['학부모폰'], "메시지": msg})
-        
-        export_df = pd.DataFrame(export_data)
-        csv = export_df.to_csv(index=False).encode('utf-8-sig')
-        
-        st.download_button(
-            label="엑셀 양식 다운로드",
-            data=csv,
-            file_name=f"hiedu_late_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
+        # 전송 및 저장 버튼
+        if st.button(f"🚀 {len(late_list)}명 지각 보고 및 저장", use_container_width=True):
+            if not late_list:
+                st.success("오늘 지각생이 없습니다! 모두 출석 완료.")
+            else:
+                # '지각기록' 탭에 데이터 추가
+                log_sheet = doc.worksheet("지각기록") # 시트에 '지각기록' 탭이 있어야 합니다!
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                
+                for s in late_list:
+                    # [날짜, 학년, 반, 성명, 학부모번호] 순서로 한 줄씩 추가
+                    log_sheet.append_row([now, s['학년'], s['반'], s['성명'], s['학부모폰']])
+                
+                st.balloons() # 축하 풍선!
+                st.success(f"{[s['성명'] for s in late_list]} 기록 완료!")
+
+except Exception as e:
+    st.error(f"⚠️ 연결 오류: {e}")
+    st.info("시트에 '로봇 이메일'이 공유되어 있는지, 탭 이름이 맞는지 확인해 주세요.")
