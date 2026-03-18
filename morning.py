@@ -75,8 +75,15 @@ try:
             else:
                 log_sheet = doc.worksheet("지각기록")
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                
                 for s in late_list:
                     log_sheet.append_row([now, s['학년'], s['반'], s['성명'], s.get('학부모폰', '')])
+                
+                # --- [수정된 부분] ---
+                # st.balloons() 는 삭제합니다.
+                st.toast(f"{len(late_list)}명의 기록을 저장했습니다.", icon="📋") 
+                st.success("데이터가 구글 시트에 안전하게 기록되었습니다.")
+                # ---------------------
                 st.balloons()
                 st.success("기록 완료!")
 
