@@ -44,7 +44,7 @@ def load_student_data(sheet_id):
     return pd.DataFrame(data, columns=new_header)
 
 # --- 메인 로직 ---
-st.title("☀️ 실시간 지각 체크 시스템")
+st.title("☀️ 지각 체크 시스템")
 
 # 왼쪽 사이드바: 명단 새로고침 버튼
 if st.sidebar.button("♻️ 명단 새로고침"):
